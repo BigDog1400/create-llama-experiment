@@ -1,8 +1,17 @@
 import { initializeAgentExecutorWithOptions } from "langchain/agents";
 import { ChatOpenAI } from "langchain/chat_models/openai";
+import { StructuredOutputParser,OutputFixingParser } from "langchain/output_parsers";
 import { DynamicStructuredTool } from "langchain/tools";
 import * as z from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+
 const gptModel = "gpt-4";
+
+const model = new ChatOpenAI({
+    modelName: gptModel,
+    openAIApiKey: process.env.OPENAI_API_KEY,
+    temperature: 0,
+  });
 
 export const STORAGE_DIR = "./data";
 export const STORAGE_CACHE_DIR = "./cache";
@@ -49,39 +58,64 @@ const getUserDataTool = (apiKey: string) => {
   return new DynamicStructuredTool({
     description: "A tool to get user data",
     func: async ({ name }) => {
-      return JSON.stringify("38 years. From Venezuela. Programmer.");
+      return JSON.stringify({result:'50years old, from the US, and works as a software engineer'});
     },
     name: "add",
     schema: z.object({
       name: z.string(),
     }),
-    returnDirect: true,
-  });
+  })
+    
 };
+
+const parser = StructuredOutputParser.fromZodSchema(
+    z.object({
+      years: z.number().describe("age of the user"),
+        country: z.string().describe("country of the user"),
+        job: z.string().describe("job of the user"),
+    })
+  );
+
+const createStructuredOutputUserDataTool = (apiKey: string) => {
+    return new DynamicStructuredTool({
+        description: "A tool to create a structured output for user data",
+        func: async ({ result }) => {
+             OutputFixingParser.fromLLM(model, parser);
+             let output = await parser.parse(result)
+            return JSON.stringify(output);
+        },
+        returnDirect: true,
+        name: "createStructuredOutputUserData",
+        schema: z.object({
+            result: z.string(),
+        }),
+    })
+}   
+
+
 
 export const agent = async (input: string) => {
   const tools = [
     getMultiplyTool(""),
     getAddTool(""),
     getUserDataTool(""),
+    createStructuredOutputUserDataTool(""),
   ];
-  const model = new ChatOpenAI({
-    modelName: gptModel,
-    openAIApiKey: process.env.OPENAI_API_KEY,
-    temperature: 0,
-  });
+
+  const toolsNames = tools.map((tool) => tool.name);
+
 
   const executor = await initializeAgentExecutorWithOptions(tools, model, {
     agentArgs: {
       prefix:
         `You are a useful tool for the user that can help them with stuff related  to math, or general knowledge`,
     },
-    agentType: "openai-functions",
+    agentType: "structured-chat-zero-shot-react-description",
     returnIntermediateSteps: true,
     verbose: true,
   });
 
-  const result = await executor.call({ input });
+  const result = await executor.call({ input, })
 
   const { output } = result;
 
